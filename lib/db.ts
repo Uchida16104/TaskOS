@@ -1,6 +1,6 @@
-import { Pool } from 'pg';
+import { Pool } from "pg";
 
-export type TaskStatus = 'todo' | 'doing' | 'done';
+export type TaskStatus = "todo" | "doing" | "done";
 
 export type TaskRow = {
   id: number;
@@ -18,29 +18,44 @@ declare global {
   var __taskOsPool: Pool | undefined;
 }
 
-const connectionString = process.env.DATABASE_URL;
+function getPool(): Pool {
+  if (globalThis.__taskOsPool) {
+    return globalThis.__taskOsPool;
+  }
 
-if (!connectionString) {
-  throw new Error('DATABASE_URL is not set.');
-}
+  const connectionString = process.env.DATABASE_URL;
 
-export const pool = globalThis.__taskOsPool ?? new Pool({
-  connectionString,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
-});
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not set.");
+  }
 
-if (process.env.NODE_ENV !== 'production') {
-  globalThis.__taskOsPool = pool;
+  const pool = new Pool({
+    connectionString,
+    ssl:
+      process.env.NODE_ENV === "production"
+        ? { rejectUnauthorized: false }
+        : undefined,
+  });
+
+  if (process.env.NODE_ENV !== "production") {
+    globalThis.__taskOsPool = pool;
+  }
+
+  return pool;
 }
 
 export async function ensureSchema(): Promise<void> {
+  const pool = getPool();
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id SERIAL PRIMARY KEY,
       title TEXT NOT NULL CHECK (length(trim(title)) > 0),
       details TEXT,
-      status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'doing', 'done')),
-      priority INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 1 AND 5),
+      status TEXT NOT NULL DEFAULT 'todo'
+        CHECK (status IN ('todo','doing','done')),
+      priority INTEGER NOT NULL DEFAULT 2
+        CHECK (priority BETWEEN 1 AND 5),
       due_date DATE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -48,17 +63,28 @@ export async function ensureSchema(): Promise<void> {
   `);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status);
+    CREATE INDEX IF NOT EXISTS tasks_status_idx
+    ON tasks(status);
   `);
 }
 
 export async function listTasks(): Promise<TaskRow[]> {
   await ensureSchema();
-  const result = await pool.query<TaskRow>(`
-    SELECT id, title, details, status, priority, due_date, created_at, updated_at
+
+  const result = await getPool().query<TaskRow>(`
+    SELECT
+      id,
+      title,
+      details,
+      status,
+      priority,
+      due_date,
+      created_at,
+      updated_at
     FROM tasks
-    ORDER BY updated_at DESC, id DESC;
+    ORDER BY updated_at DESC,id DESC;
   `);
+
   return result.rows;
 }
 
@@ -67,92 +93,163 @@ export async function createTask(input: {
   details?: string;
   status?: TaskStatus;
   priority?: number;
-  dueDate?: string | null;
+  dueDate?: string |null;
 }): Promise<TaskRow> {
+
   await ensureSchema();
+
   const title = input.title.trim();
+
   if (!title) {
-    throw new Error('title is required');
+    throw new Error("title is required");
   }
 
-  const status: TaskStatus = input.status ?? 'todo';
-  const priority = normalizePriority(input.priority ?? 2);
-  const details = input.details?.trim() || null;
-  const dueDate = input.dueDate || null;
-
-  const result = await pool.query<TaskRow>(`
-    INSERT INTO tasks (title, details, status, priority, due_date)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, title, details, status, priority, due_date, created_at, updated_at;
-  `, [title, details, status, priority, dueDate]);
+  const result = await getPool().query<TaskRow>(
+    `
+    INSERT INTO tasks
+    (
+      title,
+      details,
+      status,
+      priority,
+      due_date
+    )
+    VALUES
+    (
+      $1,$2,$3,$4,$5
+    )
+    RETURNING
+      id,
+      title,
+      details,
+      status,
+      priority,
+      due_date,
+      created_at,
+      updated_at;
+    `,
+    [
+      title,
+      input.details?.trim() || null,
+      input.status ?? "todo",
+      normalizePriority(input.priority ?? 2),
+      input.dueDate ?? null,
+    ]
+  );
 
   return result.rows[0];
 }
 
-export async function updateTask(id: number, input: Partial<{
-  title: string;
-  details: string;
-  status: TaskStatus;
-  priority: number;
-  dueDate: string | null;
-}>): Promise<TaskRow | null> {
+export async function updateTask(
+  id: number,
+  input: Partial<{
+    title: string;
+    details: string;
+    status: TaskStatus;
+    priority: number;
+    dueDate: string | null;
+  }>
+): Promise<TaskRow | null> {
+
   await ensureSchema();
+
   const fields: string[] = [];
   const values: Array<string | number | null> = [];
 
-  const push = (name: string, value: string | number | null) => {
+  const push = (
+    column: string,
+    value: string | number | null
+  ) => {
     values.push(value);
-    fields.push(`${name} = $${values.length}`);
+    fields.push(`${column} = $${values.length}`);
   };
 
-  if (typeof input.title === 'string') {
-    const trimmed = input.title.trim();
-    if (!trimmed) throw new Error('title is required');
-    push('title', trimmed);
+  if (typeof input.title === "string") {
+    const title = input.title.trim();
+
+    if (!title) {
+      throw new Error("title is required");
+    }
+
+    push("title", title);
   }
 
-  if (typeof input.details === 'string') {
-    push('details', input.details.trim() || null);
+  if (typeof input.details === "string") {
+    push("details", input.details.trim() || null);
   }
 
   if (input.status) {
-    push('status', input.status);
+    push("status", input.status);
   }
 
-  if (typeof input.priority === 'number') {
-    push('priority', normalizePriority(input.priority));
+  if (typeof input.priority === "number") {
+    push("priority", normalizePriority(input.priority));
   }
 
-  if (Object.prototype.hasOwnProperty.call(input, 'dueDate')) {
-    push('due_date', input.dueDate ?? null);
+  if (Object.prototype.hasOwnProperty.call(input, "dueDate")) {
+    push("due_date", input.dueDate ?? null);
   }
 
   if (fields.length === 0) {
-    const existing = await pool.query<TaskRow>(`
-      SELECT id, title, details, status, priority, due_date, created_at, updated_at
+
+    const existing = await getPool().query<TaskRow>(
+      `
+      SELECT
+        id,
+        title,
+        details,
+        status,
+        priority,
+        due_date,
+        created_at,
+        updated_at
       FROM tasks
-      WHERE id = $1;
-    `, [id]);
+      WHERE id = $1
+      `,
+      [id]
+    );
+
     return existing.rows[0] ?? null;
   }
 
   values.push(id);
+
   const sql = `
     UPDATE tasks
-    SET ${fields.join(', ')}, updated_at = NOW()
+    SET
+      ${fields.join(", ")},
+      updated_at = NOW()
     WHERE id = $${values.length}
-    RETURNING id, title, details, status, priority, due_date, created_at, updated_at;
+    RETURNING
+      id,
+      title,
+      details,
+      status,
+      priority,
+      due_date,
+      created_at,
+      updated_at;
   `;
 
-  const result = await pool.query<TaskRow>(sql, values);
+  const result = await getPool().query<TaskRow>(
+    sql,
+    values
+  );
+
   return result.rows[0] ?? null;
 }
 
-export async function deleteTask(id: number): Promise<boolean> {
+export async function deleteTask(
+  id: number
+): Promise<boolean> {
+
   await ensureSchema();
 
-  const result = await pool.query(
-    'DELETE FROM tasks WHERE id = $1',
+  const result = await getPool().query(
+    `
+    DELETE FROM tasks
+    WHERE id = $1
+    `,
     [id]
   );
 
@@ -160,6 +257,15 @@ export async function deleteTask(id: number): Promise<boolean> {
 }
 
 function normalizePriority(value: number): number {
-  if (!Number.isFinite(value)) return 2;
-  return Math.min(5, Math.max(1, Math.round(value)));
+  if (!Number.isFinite(value)) {
+    return 2;
+  }
+
+  return Math.min(
+    5,
+    Math.max(
+      1,
+      Math.round(value)
+    )
+  );
 }
