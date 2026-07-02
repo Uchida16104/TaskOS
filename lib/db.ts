@@ -150,8 +150,13 @@ export async function updateTask(id: number, input: Partial<{
 
 export async function deleteTask(id: number): Promise<boolean> {
   await ensureSchema();
-  const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-  return result.rowCount > 0;
+
+  const result = await pool.query(
+    'DELETE FROM tasks WHERE id = $1',
+    [id]
+  );
+
+  return (result.rowCount ?? 0) > 0;
 }
 
 function normalizePriority(value: number): number {
